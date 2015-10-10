@@ -1,0 +1,343 @@
+---
+title: "Severe weather effect on public health"
+author: "LKB"
+output: html_document
+---
+
+```{r}
+require(knitr)
+opts_chunk$set(echo = TRUE, cache = TRUE, cache.path = "cache/", fig.path = "figure/")
+```
+
+
+#Synopsis
+
+Storms and other severe weather events can affect both public health and economy on communities and municipalities level. Those events can result in fatalities, injuries, and property damage. Preventing such outcomes to the extent possible is a key concern.
+
+
+This report explores the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database, tracking characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage. The data analysis we address the following questions:
+
+* Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+* Across the United States, which types of events have the greatest economic consequences?
+
+Aim of this report is to support preparation for severe weather (at communities and municipalities level), especially resources prioritisation for different types of events.
+
+
+
+#Data Processing
+
+##Read the data
+
+```{r, echo=TRUE}
+library(data.table)
+
+
+#rm(list = ls(all = TRUE)) #clear environment
+setwd("d:/tmp/Dropbox/Edu/Coursea/DataScienceSpecialization/ReproducibleResearch/")
+Mydir<-getwd()
+
+
+if (!file.exists("./Storm.bz2")) {#have we got data?
+  DataUrl<-'https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2'
+  download.file(DataUrl,destfile = './Storm.bz2') #if not get the course data
+  }
+
+
+DataUrl<-'./Storm.bz2'
+
+```
+
+Lets understand the data, by first treading the small subset
+
+```{r}
+Data<-read.table(DataUrl,sep=",",header = T,nrows = 1400,na.strings = "NA") #check what we got
+#summary(Data)
+
+DataNames<-names(Data) #get col names
+DataClass<-as.character(sapply(Data,class)) #get col classes
+
+DataClass
+
+
+```
+There are a lot of columns in data that needs processing. Also it looks like not all classess are properly recognised.
+
+##Simplifying the data
+
+To simply the process, I will only extract:
+
+* time and location of the event
+  * for time we only use first column
+* no of ppl killed/injured in the event
+* damage to property and crops
+* type and magnitute of the event
+* remarks, as they might contain important information
+
+I will simplify extraction by treating everything as strings and converting things if needed later. This is possible, as data set will fit in the memory, but not the best approach.
+
+```{r}
+
+#define class types
+#DataClass[1:37]<-'character'
+#DataClass[c(23,24,25,27,29)]<-'numeric' #"FATALITIES" "INJURIES" "PROPDMG" "CROPDMG" "WFO"
+##problems with some columns, just ingore and use whatever pc came up with
+#,colClasses =DataClass)
+
+DataClass[1:37]<-'character'
+Data<-read.table(DataUrl,sep=",",header = T,na.strings = "NA",colClasses =DataClass)
+
+#createDate
+Data$Date<-as.POSIXct(paste(Data$BGN_DATE), format="%m/%d/%Y 0:00:00")
+#Data$Date<-as.POSIXct(paste(Data$BGN_DATE,Data$BGN_TIME), format="%m/%d/%Y 0:00:00 %H%M")
+
+#keep only listed columns
+Data<-Data[,c("Date","COUNTYNAME","STATE","EVTYPE","FATALITIES","INJURIES","PROPDMG","PROPDMGEXP","CROPDMG","CROPDMGEXP","REMARKS")]
+
+
+```
+
+Lets explore information about Property and Crop damage. Each consist of two fields (CROPDMG | PROPDMG) and (PROPDMGEXP | CROPDMGEXP). The latter should only be K,M,B (kilo, mil, bil). Lets see how much other values are affecting us
+
+```{r}
+NoOfRecords<-length(Data$PROPDMGEXP)
+properExp = c("K","M","B","k","b","")
+
+#look at PROPDMGEXP and CROPDMGEXP, is everything ok?
+levels(factor(Data$PROPDMGEXP))
+levels(factor(Data$CROPDMGEXP))
+
+
+sum(!(Data$PROPDMGEXP %in% properExp))/NoOfRecords
+sum(!(Data$CROPDMGEXP %in% properExp))/NoOfRecords
+```
+
+There is a bit of messy data in the dataset. [Database description][DataDescr] indicate prior  1996 data was kept in paper form and might be not reliable (input erors), it is also limited to tornado, thunderstorms and hails. Lets use the same characteristics to test post 1996 data.
+
+
+```{r}
+DataLimit<-Data$Date>as.POSIXct("1996-01-01") #mask all data before 1996
+
+sum(!(Data$PROPDMGEXP[DataLimit] %in% properExp))
+sum(!(Data$CROPDMGEXP[DataLimit] %in% properExp))
+
+```
+
+Given results, lets focus then on post-1996.
+
+```{r}
+Datatmp<-Data
+Data<-Data[DataLimit,]
+```
+
+
+##Economical cost
+
+Lets calculate total building and crop damage. I assume that EXP that are not (K,M,B) are ==1.
+
+
+```{r}
+GetDamage <- function(cost,cost_exp){
+
+  TotalCost <- as.numeric(cost)
+  	mask<-cost_exp %in% c("K")
+		values<-TotalCost[mask]*10^3
+	TotalCost[mask] <- values
+		mask<-cost_exp %in% c("M")
+		values<-TotalCost[mask]*10^6
+	TotalCost[mask] <- values
+		mask<-cost_exp %in% c("B")
+		values<-TotalCost[mask]*10^9
+	TotalCost[mask] <- values
+
+	TotalCost
+}
+
+```
+
+
+```{r}
+levels(factor(Data$PROPDMGEXP))
+Data$PropertyDamage<-GetDamage(Data$PROPDMG,Data$PROPDMGEXP)
+levels(factor(Data$CROPDMGEXP))
+Data$CropDamage<-GetDamage(Data$CROPDMG,Data$CROPDMGEXP)
+
+class(Data$EVTYPE)
+
+
+```
+Property damage seems to have one visible outlayer.
+There is no outlayer in CropDamage
+
+
+```{r}
+
+
+CropDamage <- as.numeric(Data$CROPDMG)
+  mask<-which(Data$CROPDMGEXP %in% c("K"))
+  values<-CropDamage[mask]*10^3
+CropDamage[mask] <- values
+  mask<-Data$CROPDMGEXP %in% c("M")
+  values<-CropDamage[mask]*10^6
+CropDamage[mask] <- values
+  mask<-which(Data$CROPDMGEXP %in% c("B"))
+  values<-CropDamage[mask]*10^9
+CropDamage[mask] <- values
+
+```
+
+
+##Health cost
+
+Health cost is defined as number of ppl killed or injured during the incidents.
+
+
+##Events
+
+```{r}
+levels(factor(Data$EVTYPE))
+```
+
+
+There should be 48 event types according to [NOAA Storm data manual][NOAA Storm data] but we observe 515 types.
+
+```{r}
+#events as defined in Storm event table (NOAA Storm data, page 6)
+StormEvents<-c("Astronomical Low","Avalanche","Blizzard ","Coastal Flood","Cold/Wind Chill","Debris Flow","Dense Fog","Dense Smoke","Drought ","Dust Devil","Dust Storm","Excessive Heat","Extreme Cold/Wind","Flash Flood","Flood C","Frost/Freeze","Funnel Cloud","Freezing Fog","Hail ","Heat","Heavy Rain","Heavy Snow","High Surf","High Wind","Hurricane (Typhoon)","Ice Storm","Lake-Effect Snow","Lakeshore Flood","Lightning ","Marine Hail","Marine High","Marine Strong","Marine Thunderstorm","Rip Current","Seiche","Sleet","Storm Surge/Tide","Strong Wind","Thunderstorm Wind","Tornado ","Tropical Depression","Tropical Storm","Tsunami ","Volcanic Ash","Waterspout","Wildfire ","Winter Storm","Winter Weather")
+```
+
+
+ To simplify following analysis I will only analyse events that:
+
+* had caused an injury or fatality
+* had caused at least $1 in damage
+* Ignore any "Summary" events
+
+```{r}
+
+selData <- Data[which(Data$INJURIES > 0 | Data$FATALITIES > 0 | Data$PropertyDamage > 1 | Data$CropDamage > 1),]
+
+```
+
+All "summary" events are gone now and we have `r length(levels(factor(selData$EVTYPE)))` event types now.
+
+```{r}
+
+
+Tsunami<-grep("^TST",selData$EVTYPE, ignore.case = T)
+Cold <-grep("Cold",selData$EVTYPE, ignore.case = T)
+Wind <- grep("wind",selData$EVTYPE, ignore.case = T)
+Snow <- grep("snow",selData$EVTYPE, ignore.case = T)
+Frost <- grep("frost",selData$EVTYPE, ignore.case = T)
+Freeze <- grep("Freeze",selData$EVTYPE, ignore.case = T)
+HSurf <- grep("Surf",selData$EVTYPE, ignore.case = T)
+Flood <- grep("flood",selData$EVTYPE, ignore.case = T)
+Flood2 <- grep("fld",selData$EVTYPE, ignore.case = T)
+Tide <- grep("tide",selData$EVTYPE, ignore.case = T)
+Winter <- grep("MIX",selData$EVTYPE, ignore.case = T)
+Winter2 <- grep("ice",selData$EVTYPE, ignore.case = T)
+Winter3 <- grep("Winter",selData$EVTYPE, ignore.case = T)
+fog <- grep("fog",selData$EVTYPE, ignore.case = T)
+Hail <- grep("Hail",selData$EVTYPE, ignore.case = T)
+Rain <- grep("rain",selData$EVTYPE, ignore.case = T)
+Hot <- grep("warm",selData$EVTYPE, ignore.case = T)
+Hot2 <- grep("heat",selData$EVTYPE, ignore.case = T)
+typhoon <- grep("typhoon",selData$EVTYPE, ignore.case = T)
+slide <- grep("slide",selData$EVTYPE, ignore.case = T)
+dust <- grep("dust",selData$EVTYPE, ignore.case = T)
+storm <- grep("storm",selData$EVTYPE, ignore.case = T)
+
+
+
+selData$EVTYPE[Tsunami]<-"Tsunami"
+selData$EVTYPE[Cold]<-"Winter"
+selData$EVTYPE[Wind]<-"Wind"
+selData$EVTYPE[Snow]<-"Snow"
+selData$EVTYPE[Frost]<-"Frost"
+selData$EVTYPE[Freeze]<-"Frost"
+selData$EVTYPE[HSurf]<-"High Surf"
+selData$EVTYPE[Flood]<-"Flood"
+selData$EVTYPE[Tide]<-"Tide"
+selData$EVTYPE[Winter]<-"Winter"
+selData$EVTYPE[Winter2]<-"Winter"
+selData$EVTYPE[Winter3]<-"Winter"
+selData$EVTYPE[fog]<-"Fog"
+selData$EVTYPE[Hail]<-"Hail"
+selData$EVTYPE[Rain]<-"Rain"
+selData$EVTYPE[Hot]<-"Hot"
+selData$EVTYPE[Hot2]<-"Hot"
+selData$EVTYPE[typhoon]<-"typhoon"
+selData$EVTYPE[Flood2]<-"Flood"
+selData$EVTYPE[slide]<-"slide"
+selData$EVTYPE[dust]<-"dust"
+selData$EVTYPE[storm]<-"storm"
+#levels(factor(selData$EVTYPE))
+
+```
+
+
+Let calculate total for both economic and health effects. We will only plot top 5 events.
+
+```{r}
+selData$TotalDamage<-selData$PropertyDamage+selData$CropDamage
+
+totalEconomic<-aggregate(selData$TotalDamage,by=list(Event=selData$EVTYPE),FUN=sum, na.rm=TRUE, simplify = TRUE)
+#sort
+totalEconomic<-totalEconomic[with(totalEconomic, order(-x)),]
+#select top 5
+totalEconomic<-totalEconomic[1:5,]
+#plot it
+barplot(totalEconomic$x,names.arg = totalEconomic$Event, main = "Most economically affecting events")
+
+```
+
+Lets calculate total health effects. Here as well we will only plot top 5 events.
+
+
+```{r}
+
+selData$FATALITIES<-as.integer(selData$FATALITIES)
+selData$NJURIES<-as.integer(selData$INJURIES)
+
+totalDead<-aggregate(selData$FATALITIES,by=list(Event=selData$EVTYPE),FUN=sum, na.rm=TRUE, simplify = TRUE)
+totalDead<-totalDead[with(totalDead, order(-x)),]
+#select top 5
+totalDead<-totalDead[1:5,]
+#plot it
+barplot(totalDead$x,names.arg = totalDead$Event, main = "Most deadly events")
+
+#no idea why I need to convert to integer again
+totalInjury<-aggregate(as.integer(selData$INJURIES),by=list(Event=selData$EVTYPE),FUN=sum, na.rm=TRUE, simplify = TRUE)
+totalInjury<-totalInjury[with(totalInjury, order(-x)),]
+#select top 5
+totalInjury<-totalInjury[1:5,]
+#plot it
+barplot(totalInjury$x,names.arg = totalInjury$Event, main = "Most injury prone events")
+
+
+
+```
+
+#Results
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.
+
+Following assumptions have been made
+
+* only 1996+ data was analysed
+* for PROPDMGEXP and CROPDMGEXP values are
+  * K = 10^3
+  * M = 10^6
+  * B = 10^9
+* everything else (few records after 1996) ==1.
+
+Based on the analysis conducted the top three weather events in United States from 1950 untill 2011 that causes greatest economic consequences were flood, hurricane and tornado.
+
+
+This is a very quick summary (due to time constrains) and more in-depth research is recommended.
+
+
+[FAQ]: https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf "NOAA Storm Data FAQ Page"
+[man]: https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf "NOAA Storm data preparation"
+[DataDescr]: http://www.ncdc.noaa.gov/stormevents/details.jsp?type=eventtype
+[DataClean]: http://cran.r-project.org/doc/contrib/de_Jonge+van_der_Loo-Introduction_to_data_cleaning_with_R.pdf
+[NiceLooking]: http://rpubs.com/rsankowski/89259

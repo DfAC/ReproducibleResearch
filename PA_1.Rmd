@@ -1,0 +1,144 @@
+---
+title: "Reproducible Research: Peer Assessment 1"
+output:
+  html_document:
+    keep_md: true
+---
+
+
+
+```{r, echo=FALSE}
+setwd("d:/tmp/Dropbox/Edu/Coursea/DataScienceSpecialization/ReproducibleResearch/RepData_PeerAssessment1/")
+
+#lets get course data
+#DataUrl<-'https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip'
+#download.file(DataUrl,destfile = './data.zip')
+unzip('./activity.zip')
+#unlink('./activity.zip') #delete zip file
+```
+
+
+## Loading and preprocessing the data
+
+
+```{r}
+DataUrl<-file.path(getwd(),"activity.csv")
+
+Data<-read.table(DataUrl,header = T, sep = ",")
+names(Data)
+
+#lets get some proper dates
+Data$date<-as.POSIXct(paste(Data$date), format="%Y-%m-%d")
+
+```
+
+
+## What is mean total number of steps taken per day?
+
+```{r}
+NoOfDays<-length(unique(Data$date))
+#aggregate by days
+DailyWalk<-aggregate(steps ~ date,Data,sum)
+summary(DailyWalk$steps,na.rm = T)
+
+```
+
+Data was taken over `r NoOfDays` days, with mean of `r mean(DailyWalk$steps,na.rm = T)` and median of `r median(DailyWalk$steps,na.rm = T)` steps taken per day. 
+
+Data histogram suggest that activities vary from day to day
+
+```{r}
+library(ggplot2)
+
+
+HistPlot<-ggplot(DailyWalk, aes(steps)) + geom_histogram(aes(y = ..density..), binwidth = 500) + labs(title = "Steps per day")
+HistPlot
+
+```
+
+
+
+## What is the average daily activity pattern?
+
+Lets compare average number of steps, across all days, in each interval. 
+
+```{r}
+#aggregate by days
+DailyWalk<-aggregate(steps ~ interval,Data,mean)
+summary(DailyWalk$steps,na.rm = T)
+
+```
+
+
+Represent it as a time series.
+
+```{r}
+ggplot(DailyWalk, aes(interval, steps))+geom_line()
+
+TimeofMaxActivity<-DailyWalk$interval[DailyWalk$steps==max(DailyWalk$steps)]
+```
+
+Across all days peak of activity (no of steps), is around `r TimeofMaxActivity` interval.
+
+
+## Imputing missing values
+
+
+```{r}
+
+#find N/As
+MissingValues<-sum(!complete.cases(Data))
+```
+
+We got a total of `r MissingValues` ()missing records. 
+
+We will replace NAs with average value for particular interval.
+
+```{r}
+library(plyr) #arrange
+MisingValueMask<-!complete.cases(Data)
+
+NAsFiller<-merge(Data[MisingValueMask,c("date","interval")],DailyWalk,by="interval",sort=F )
+NAsFiller<-arrange(NAsFiller,date)
+
+DataCorrected<-Data
+#create a set without NAs
+DataCorrected[MisingValueMask,c("steps")]<-NAsFiller[,c("steps")]
+```
+
+Lets compare how repacement of NAs changes mean and median total number of steps taken per day.
+
+```{r}
+#aggregate by days
+DailyWalk<-aggregate(steps ~ date,DataCorrected,sum)
+summary(DailyWalk$steps,na.rm = T)
+
+#replog ggplot with upgraded dataframe
+HistPlot %+% DailyWalk
+```
+
+**DataCorrected** mean is `r mean(DailyWalk$steps,na.rm = T)` and median is `r median(DailyWalk$steps,na.rm = T)` steps taken per day. 
+Filling in NAs has removed small skew in the data, with mean and median bein now almost equal
+
+
+## Are there differences in activity patterns between weekdays and weekends?
+
+Lets identify weeekdays and weekends first.
+
+```{r}
+DayOfWeek<-weekdays(Data$date, abbreviate=T)
+
+#define weekend
+Data$DayType<-"weekday"
+Data$DayType[DayOfWeek %in% c("Sat","Sun")]<-"weekend"
+```
+
+Lets plot and compare.
+
+```{r}
+ggplot(aes(x=interval,y=steps),data = Data)+geom_line(aes(colour = DayType))+  theme_bw()+facet_wrap(~DayType,nrow=2) +  labs(title = "Activity comparison between weekdays and weekends",legend.position = "none")  
+
+```
+
+There is difference in activities between weekends and weekdays.
+
