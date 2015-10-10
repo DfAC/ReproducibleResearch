@@ -8,7 +8,7 @@ output: html_document
 require(knitr)
 opts_chunk$set(echo = TRUE, cache = TRUE, cache.path = "cache/", fig.path = "figure/")
 ```
-
+This code can be [found on github](https://github.com/DfAC/ReproducibleResearch).
 
 #Synopsis
 
